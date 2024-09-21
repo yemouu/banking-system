@@ -12,6 +12,7 @@ pub fn build(b: *std.Build) void {
         });
 
         exe.linkLibC();
+        exe.linkSystemLibrary("pthread");
         exe.addCSourceFiles(.{
             .root = b.path("src"),
             .files = &.{"bank-client.c"},
