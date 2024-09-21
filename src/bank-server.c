@@ -1,23 +1,53 @@
+#include <errno.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "common.h"
-#include "sys/poll.h"
 
 int accountTotal;
 int stop;
 pthread_mutex_t lock;
+pthread_t activeLockerId;
 
 void *complete_transaction(void *arguments) {
 	int socket = *(int *)arguments;
 	free(arguments);
 
-	pthread_mutex_lock(&lock);
+	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+	pthread_cleanup_push((void *)pthread_mutex_unlock, (void *) &lock);
+
+	struct timespec timeout;
+	clock_gettime(CLOCK_REALTIME, &timeout);
+	timeout.tv_sec += 10;
+
+	while (1) {
+		int ret = pthread_mutex_timedlock(&lock, &timeout);
+
+		switch (ret) {
+		case 0:
+			break;
+		case EAGAIN:
+		case ETIMEDOUT:
+			printf("server: thread (%lu) took too long, canceling it\n",
+			       activeLockerId);
+			pthread_cancel(activeLockerId);
+			continue;
+		default:
+			perror("server: pthread_mutex_timedlock");
+			pthread_exit(NULL);
+		}
+
+		break;
+	}
+
+	activeLockerId = pthread_self();
 
 	char buffer[BUFFER_SIZE];
 	int err = recv(socket, &buffer, BUFFER_SIZE, 0);
@@ -40,8 +70,7 @@ void *complete_transaction(void *arguments) {
 
 	// Let's cause a deadlock
 	if (transaction_amount > 250)
-		while (1)
-			;
+		pthread_mutex_lock(&lock);
 
 	int previous_total = accountTotal;
 	accountTotal += transaction_amount;
@@ -49,7 +78,9 @@ void *complete_transaction(void *arguments) {
 	printf("server: total is now %d (%d + %d)\n", accountTotal,
 	       transaction_amount, previous_total);
 
+	activeLockerId = -1;
 	pthread_mutex_unlock(&lock);
+	pthread_cleanup_pop(0); 
 	return NULL;
 }
 
@@ -92,6 +123,7 @@ int main(void) {
 	socket_poll[0].events = POLLIN;
 
 	stop = 0;
+	activeLockerId = -1;
 
 	printf("server: Ready\n");
 	while (1) {
