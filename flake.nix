@@ -21,8 +21,12 @@
         ];
 
         text = ''
-          bank-server
-          bank-client
+          set -m
+          bank-server &
+          sleep 1
+          bank-client 100
+          printf '%s\n' "Done sending transactions, press Ctrl+C to stop the server"
+          fg %1
         '';
       };
 
