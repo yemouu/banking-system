@@ -1,3 +1,4 @@
+#include <poll.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,31 +7,44 @@
 #include <unistd.h>
 
 #include "common.h"
+#include "sys/poll.h"
 
-struct bankAccount {
-	int total;
-};
+int accountTotal;
+int stop;
+pthread_mutex_t lock;
 
-struct threadArgs {
-	int transaction_amount;
-	struct bankAccount *account;
-};
+void *complete_transaction(void *arguments) {
+	int socket = *(int *)arguments;
+	free(arguments);
 
-void *complete_transaction(void *ptr) {
-	struct threadArgs *args = ptr;
+	pthread_mutex_lock(&lock);
 
-	int transaction_amount = args->transaction_amount;
-	struct bankAccount *account = args->account;
+	char buffer[BUFFER_SIZE];
+	int err = recv(socket, &buffer, BUFFER_SIZE, 0);
+	if (err < 0) {
+		perror("server: recv");
+	}
+
+	if (buffer[0] == 'e' && buffer[1] == '\0') {
+		stop = 1;
+		printf("server: Closing\n");
+		close(socket);
+		pthread_mutex_unlock(&lock);
+		pthread_exit(NULL);
+	}
+
+	int transaction_amount = strtol(buffer, NULL, 10);
 
 	printf("server: new thread for transaction for amount %d\n",
 	       transaction_amount);
 
-	int previous_total = account->total;
-	account->total += transaction_amount;
+	int previous_total = accountTotal;
+	accountTotal += transaction_amount;
 
-	printf("server: total is now %d (%d + %d)\n", account->total,
+	printf("server: total is now %d (%d + %d)\n", accountTotal,
 	       transaction_amount, previous_total);
 
+	pthread_mutex_unlock(&lock);
 	return NULL;
 }
 
@@ -52,40 +66,64 @@ int main(void) {
 		return 1;
 	}
 
-	struct bankAccount account;
-	account.total = 0;
+	accountTotal = 0;
 
-	listen(sockfd, 128);
-	printf("server: Ready\n");
-	while (1) {
-		struct sockaddr_un client_addr;
-		socklen_t client_addr_len = sizeof(client_addr);
-		int client_socket_fd =
-			accept(sockfd, (struct sockaddr *)&client_addr, &client_addr_len);
-
-		char buffer[BUFFER_SIZE];
-		read(client_socket_fd, &buffer, BUFFER_SIZE);
-
-		if (buffer[0] == 'e' && buffer[1] == '\0') {
-			printf("server: Closing\n");
-			break;
-		}
-
-		printf("server: recieved transaction for %s\n", buffer);
-		size_t transaction_amount = strtol(buffer, NULL, 10);
-
-		pthread_t thread;
-		struct threadArgs args;
-
-		args.transaction_amount = transaction_amount;
-		args.account = &account;
-
-		pthread_create(&thread, NULL, *complete_transaction, &args);
-
-		close(client_socket_fd);
+	err = pthread_mutex_init(&lock, NULL);
+	if (err < 0) {
+		perror("server: pthread_mutex_init");
+		return 1;
 	}
 
-	printf("server: Account Total: %d\n", account.total);
+	err = listen(sockfd, 128);
+	if (err < 0) {
+		perror("server: listen");
+		return 1;
+	}
+
+	socklen_t server_addr_size = sizeof(sock_addr);
+
+	struct pollfd socket_poll[1];
+	socket_poll[0].fd = sockfd;
+	socket_poll[0].events = POLLIN;
+
+	stop = 0;
+
+	printf("server: Ready\n");
+	while (1) {
+		if (stop)
+			break;
+
+		int ret = poll(socket_poll, 1, 0);
+		if (ret < 0) {
+			perror("server: poll");
+			return 1;
+		}
+
+		if (!ret)
+			continue;
+
+		int *client_socket = (int *)malloc(sizeof(int));
+		*client_socket =
+			accept(sockfd, (struct sockaddr *)&sock_addr, &server_addr_size);
+		if (*client_socket < 0) {
+			perror("server: accept");
+			free(client_socket);
+			continue;
+		}
+
+		printf("server: accepted new connection (fd: %d)\n", *client_socket);
+
+		pthread_t thread;
+		pthread_create(&thread, NULL, complete_transaction, client_socket);
+	}
+
+	printf("server: Account Total: %d\n", accountTotal);
+
+	err = pthread_mutex_destroy(&lock);
+	if (err < 0) {
+		perror("server: pthread_mutex_destroy");
+		return 1;
+	}
 
 	close(sockfd);
 	unlink(SOCKET_NAME);

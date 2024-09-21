@@ -1,4 +1,3 @@
-#include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,11 +9,20 @@
 
 #include "common.h"
 
-void *make_transaction(void *ptr) {
+pthread_mutex_t lock;
+
+void *make_transaction(void *arguments) {
+	int err = pthread_mutex_lock(&lock);
+	if (err < 0) {
+		perror("client: pthread_mutex_lock");
+		pthread_exit(NULL);
+	}
+
 	int socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (socket_fd < 0) {
 		perror("client: socket");
-		return NULL;
+		err = pthread_mutex_unlock(&lock);
+		pthread_exit(NULL);
 	}
 
 	struct sockaddr_un socket_addr;
@@ -22,55 +30,77 @@ void *make_transaction(void *ptr) {
 	socket_addr.sun_family = AF_UNIX;
 	strcpy(socket_addr.sun_path, SOCKET_NAME);
 
-	int err = connect(socket_fd, (struct sockaddr *)&socket_addr,
-	                  sizeof(socket_addr));
+	err = connect(socket_fd, (struct sockaddr *)&socket_addr,
+	              sizeof(socket_addr));
 	if (err < 0) {
 		perror("client: connect");
-		return NULL;
+		err = pthread_mutex_unlock(&lock);
+		pthread_exit(NULL);
 	}
 
 	int r = rand() % 1001 + (-500); // Inclusive range -500 to 500
-	printf("client: making transaction of %d\n", r);
+	printf("client: transaction of %d\n", r);
 
 	char buffer[BUFFER_SIZE];
 	snprintf(buffer, BUFFER_SIZE, "%d", r);
-	err = write(socket_fd, &buffer, sizeof(buffer));
+
+	err = send(socket_fd, &buffer, sizeof(buffer), 0);
 	if (err < 0) {
-		perror("client: write");
+		perror("client: send");
+		err = pthread_mutex_unlock(&lock);
+		pthread_exit(NULL);
 	}
 
-	close(socket_fd);
+	err = pthread_mutex_unlock(&lock);
+	if (err < 0) {
+		perror("client: pthread_mutex_unlock");
+		err = pthread_mutex_unlock(&lock);
+		pthread_exit(NULL);
+	}
+
+	err = close(socket_fd);
+	if (err < 0) {
+		perror("client: close");
+		err = pthread_mutex_unlock(&lock);
+		pthread_exit(NULL);
+	}
+
+	err = pthread_mutex_unlock(&lock);
+	if (err < 0) {
+		perror("client: pthread_mutex_unlock");
+		pthread_exit(NULL);
+	}
 	return NULL;
 }
 
 int main(int argc, char *argv[]) {
-	// CLI Arguments:
-	//     Amount of transactions
-	if (argc < 2) {
-		return 1;
-	}
-
-	int number_of_transactions = strtol(argv[1], NULL, 10);
-	if (errno != 0) {
-		perror("client: strtol");
-		return 1;
-	}
-
-	int socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (socket_fd < 0) {
-		perror("client: socket");
-		return 1;
-	}
-
 	srand(time(NULL));
 
-	pthread_t threads[number_of_transactions];
-	for (int i = 0; i < number_of_transactions; i++) {
-		pthread_create(&threads[i], NULL, *make_transaction, NULL);
+	pthread_t threads[NUMBER_OF_THREADS];
+	int err = pthread_mutex_init(&lock, NULL);
+	if (err < 0) {
+		perror("client: pthread_mutex_init");
+		return 1;
 	}
 
-	for (int i = 0; i < number_of_transactions; i++) {
-		pthread_join(threads[i], NULL);
+	for (int i = 0; i < NUMBER_OF_THREADS; i++) {
+		err = pthread_create(&threads[i], NULL, make_transaction, NULL);
+		if (err < 0) {
+			perror("client: pthread_create");
+		}
+	}
+
+	for (int i = 0; i < NUMBER_OF_THREADS; i++) {
+		err = pthread_join(threads[i], NULL);
+		if (err < 0) {
+			perror("client: pthread_join");
+		}
+	}
+
+	err = pthread_mutex_destroy(&lock);
+	if (err < 0) {
+		perror("client: pthread_mutex_destroy");
+		return 1;
 	}
 
 	return 0;
