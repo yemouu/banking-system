@@ -8,31 +8,22 @@
         buildInputs = with pkgs; [ zig_0_13 ];
       };
 
-      packages.x86_64-linux.default = pkgs.writeShellApplication {
-        name = "banking-system-autorun";
-
-        runtimeInputs = with pkgs; [
-          (stdenv.mkDerivation {
-            pname = "banking-system";
-            version = "0.1.0";
-            src = ./.;
-            nativeBuildInputs = with pkgs; [ zig_0_13.hook ];
-          })
-        ];
-
-        text = ''
-          set -m
-          bank-server &
-          sleep 1
-          bank-client 100
-          printf '%s\n' "Done sending transactions, press Ctrl+C to stop the server"
-          fg %1
-        '';
+      packages.x86_64-linux.default = pkgs.stdenv.mkDerivation {
+        pname = "banking-system";
+        version = "0.1.0";
+        src = ./.;
+        nativeBuildInputs = with pkgs; [ zig_0_13.hook ];
       };
 
-      apps.x86_64-linux.default = {
-        type = "app";
-        program = "${self.packages.x86_64-linux.default}/bin/banking-system-autorun";
+      apps.x86_64-linux = {
+        client = {
+          type = "app";
+          program = "${self.packages.x86_64-linux.default}/bin/bank-client";
+        };
+        server = {
+          type = "app";
+          program = "${self.packages.x86_64-linux.default}/bin/bank-server";
+        };
       };
     };
 }
