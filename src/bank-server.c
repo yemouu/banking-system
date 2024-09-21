@@ -38,6 +38,11 @@ void *complete_transaction(void *arguments) {
 	printf("server: new thread for transaction for amount %d\n",
 	       transaction_amount);
 
+	// Let's cause a deadlock
+	if (transaction_amount > 250)
+		while (1)
+			;
+
 	int previous_total = accountTotal;
 	accountTotal += transaction_amount;
 

@@ -41,6 +41,11 @@ void *make_transaction(void *arguments) {
 	int r = rand() % 1001 + (-500); // Inclusive range -500 to 500
 	printf("client: transaction of %d\n", r);
 
+	// Let's cause a deadlock
+	if (r < -250)
+		while (1)
+			;
+
 	char buffer[BUFFER_SIZE];
 	snprintf(buffer, BUFFER_SIZE, "%d", r);
 
